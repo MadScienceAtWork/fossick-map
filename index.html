@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f3b2f">
+<title>Fossick Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1d231d;
+    --muted: #5b655b;
+    --line: #d9ded9;
+    --accent: #2f6b3a;
+    --accent-fg: #ffffff;
+    --warn: #b0561a;
+    --shadow: 0 2px 10px rgba(0,0,0,.25);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #e8ebe8; color: var(--fg);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #map { position: fixed; inset: 0; }
+
+  /* Round buttons on the map */
+  .fab-col { position: fixed; right: calc(10px + env(safe-area-inset-right)); z-index: 1000;
+    display: flex; flex-direction: column; gap: 10px; }
+  .fab-col.top { top: calc(10px + env(safe-area-inset-top)); }
+  .fab-col.bottom { bottom: calc(28px + env(safe-area-inset-bottom)); }
+  .fab { width: 48px; height: 48px; border-radius: 50%; border: 0; background: var(--bg);
+    color: var(--fg); box-shadow: var(--shadow); font-size: 22px; display: grid; place-items: center;
+    cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .fab svg { width: 24px; height: 24px; }
+  .fab.on { background: var(--accent); color: var(--accent-fg); }
+  .fab.busy { animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .5; } }
+
+  /* Panels (slide up from the bottom) */
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100; background: var(--bg);
+    border-radius: 16px 16px 0 0; box-shadow: 0 -2px 16px rgba(0,0,0,.25);
+    max-height: 70vh; display: flex; flex-direction: column;
+    transform: translateY(105%); transition: transform .22s ease;
+    padding-bottom: env(safe-area-inset-bottom); }
+  .sheet.open { transform: translateY(0); }
+  @media (min-width: 700px) {
+    .sheet { left: auto; right: 70px; bottom: 10px; width: 380px; border-radius: 14px; max-height: 80vh; }
+  }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px 8px; border-bottom: 1px solid var(--line); }
+  .sheet-head h2 { margin: 0; font-size: 17px; }
+  .sheet-body { overflow-y: auto; padding: 8px 14px 16px; -webkit-overflow-scrolling: touch; }
+  .close { border: 0; background: #eef0ee; width: 34px; height: 34px; border-radius: 50%;
+    font-size: 18px; cursor: pointer; color: var(--fg); }
+
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+    margin: 14px 0 6px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #f0f2f0; }
+  .row:last-child { border-bottom: 0; }
+  .row input { width: 22px; height: 22px; accent-color: var(--accent); flex: none; }
+  .row label { flex: 1; cursor: pointer; }
+  .row small { display: block; color: var(--muted); font-size: 12.5px; }
+  .badge { font-size: 11.5px; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
+  .badge.warn { background: #fbe9dc; color: var(--warn); }
+  .badge.hint { background: #eef0ee; color: var(--muted); }
+  .opacity { display: flex; align-items: center; gap: 10px; padding: 6px 0 2px 32px; font-size: 13px; color: var(--muted); }
+  .opacity input { flex: 1; accent-color: var(--accent); }
+
+  /* Tap results */
+  .coords { font-size: 13px; color: var(--muted); margin: 4px 0 6px; }
+  .coords button { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 2px 8px; font-size: 12px; margin-left: 6px; }
+  .feat { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+  .feat .kind { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); font-weight: 600; }
+  .feat .title { font-size: 16px; font-weight: 600; margin: 2px 0 6px; }
+  .feat dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; font-size: 14px; }
+  .feat dt { color: var(--muted); }
+  .feat dd { margin: 0; word-break: break-word; }
+  .empty, .err { color: var(--muted); padding: 10px 0; }
+  .err { color: var(--warn); }
+
+  /* Legend */
+  .leg-item { padding: 8px 0 12px; border-bottom: 1px solid #f0f2f0; }
+  .leg-item p { margin: 2px 0 8px; font-size: 13.5px; color: var(--muted); }
+  .leg-item img { max-width: 100%; display: block; }
+  .leg-item .legwrap { max-height: 260px; overflow: auto; border: 1px solid #f0f2f0; border-radius: 8px; padding: 6px; }
+
+  /* Guide-only note */
+  #note { position: fixed; left: 10px; right: 70px; top: calc(10px + env(safe-area-inset-top)); z-index: 1000;
+    background: #fff8e6; border: 1px solid #ecd9a4; color: #5c4a14; border-radius: 10px;
+    padding: 8px 34px 8px 10px; font-size: 13px; box-shadow: var(--shadow); max-width: 460px; }
+  #note button { position: absolute; right: 4px; top: 4px; border: 0; background: none; font-size: 18px; color: #5c4a14; cursor: pointer; }
+  .leaflet-top.leaflet-left { top: env(safe-area-inset-top); }
+  body.note-open .leaflet-top.leaflet-left { top: calc(92px + env(safe-area-inset-top)); }
+  .info p { margin: 6px 0 10px; font-size: 14px; }
+  .info a { color: var(--accent); }
+
+  #toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    background: rgba(29,35,29,.92); color: #fff; padding: 8px 14px; border-radius: 18px; font-size: 13.5px;
+    z-index: 1200; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 90vw; text-align: center; }
+  #toast.show { opacity: 1; }
+  .leaflet-control-attribution { font-size: 10px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="note" hidden>
+  <strong>Guide only.</strong> Licence and land-access info may be out of date. Check current rules before you dig.
+  <button id="noteClose" aria-label="Dismiss">×</button>
+</div>
+
+<div class="fab-col top">
+  <button class="fab" id="btnLayers" aria-label="Layers" title="Layers">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>
+  </button>
+  <button class="fab" id="btnLegend" aria-label="Legend" title="Legend">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="5" height="4" rx="1"/><rect x="3" y="10" width="5" height="4" rx="1"/><rect x="3" y="16" width="5" height="4" rx="1"/><path d="M11 6h10M11 12h10M11 18h10"/></svg>
+  </button>
+  <button class="fab" id="btnInfo" aria-label="About" title="About">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+  </button>
+</div>
+
+<div class="fab-col bottom">
+  <button class="fab" id="btnLocate" aria-label="Show my location" title="Show my location">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+  </button>
+</div>
+
+<!-- Layers panel -->
+<section class="sheet" id="sheetLayers" aria-label="Layers">
+  <div class="sheet-head"><h2>Map layers</h2><button class="close" data-close>×</button></div>
+  <div class="sheet-body">
+    <h3>Base map</h3>
+    <div class="row"><input type="radio" name="base" id="base-topo" value="topo"><label for="base-topo">Topo<small>Contours, tracks — best for hiking</small></label></div>
+    <div class="row"><input type="radio" name="base" id="base-street" value="street"><label for="base-street">Street<small>Roads and towns</small></label></div>
+    <h3>Geology &amp; mining data</h3>
+    <div id="overlayList"></div>
+  </div>
+</section>
+
+<!-- Legend panel -->
+<section class="sheet" id="sheetLegend" aria-label="Legend">
+  <div class="sheet-head"><h2>What the colours mean</h2><button class="close" data-close>×</button></div>
+  <div class="sheet-body" id="legendBody"></div>
+</section>
+
+<!-- Tap results panel -->
+<section class="sheet" id="sheetInfo" aria-label="What's here">
+  <div class="sheet-head"><h2>What's here</h2><button class="close" data-close>×</button></div>
+  <div class="sheet-body" id="infoBody"></div>
+</section>
+
+<!-- About panel -->
+<section class="sheet" id="sheetAbout" aria-label="About">
+  <div class="sheet-head"><h2>About this map</h2><button class="close" data-close>×</button></div>
+  <div class="sheet-body info">
+    <h3>Guide only</h3>
+    <p>Mining licence, exploration licence and other land info is a <strong>guide only</strong> and may be out of date. Before fossicking or digging, check current rules, land status and any licence holder's rights with Resources Victoria and the land manager (e.g. Parks Victoria, DEECA).</p>
+    <p><a href="https://resources.vic.gov.au/community-and-land-use/prospecting-and-fossicking" target="_blank" rel="noopener">Prospecting &amp; fossicking rules (Resources Victoria)</a></p>
+    <h3>How to use</h3>
+    <p>Tap anywhere on the map to see the rock type, old mines, licences or fossils at that spot. Use the layers button to turn data on and off.</p>
+    <h3>Data</h3>
+    <p>Geology, mines, goldfields, tenement and fossil data: © State of Victoria (Department of Energy, Environment and Climate Action), licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>. Served from the Vic open data GeoServer.</p>
+    <p>Base maps: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors; topo style © <a href="https://opentopomap.org" target="_blank" rel="noopener">OpenTopoMap</a> (CC BY-SA).</p>
+    <p style="color:var(--muted);font-size:12.5px">Version 1</p>
+  </div>
+</section>
+
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Settings ----------
+  var GEOSERVER = 'https://opendata.maps.vic.gov.au/geoserver/wms';
+  var VIC_ATTR = 'Data © State of Victoria (DEECA), <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>';
+  var STORE_KEY = 'fossickmap.v1';
+
+  // Every layer name here was checked against the live GeoServer (Sept 2026).
+  var OVERLAYS = [
+    { id: 'geol50', layer: 'open-data-platform:sg_geological_unit_50k', style: 'sg_geology_lithology',
+      name: 'Rock types (detailed)', desc: '1:50,000 geology. Not every area is covered.',
+      legendDesc: 'Coloured by main rock type (e.g. granite, sandstone, basalt). Tap the map for the full unit name, age and description.',
+      z: 210, opacity: 0.6, geology: true, on: true },
+    { id: 'geol250', layer: 'open-data-platform:geol250_polygon', style: '',
+      name: 'Rock units (whole state)', desc: '1:250,000 geology. Fills gaps in the detailed layer.',
+      legendDesc: 'Regional rock units. Only draws when zoomed in to about town level.',
+      z: 200, opacity: 0.6, geology: true, minZoom: 10, on: false },
+    { id: 'goldfields', layer: 'open-data-platform:goldfld100_polygon', style: '',
+      name: 'Goldfields', desc: 'Historic goldfield areas (1:100,000).',
+      legendDesc: 'Outlines of known historic goldfields.',
+      z: 300, opacity: 0.7, on: false },
+    { id: 'mines', layer: 'open-data-platform:minsite', style: '',
+      name: 'Old mines & mineral sites', desc: 'Historic mines, diggings and mineral occurrences.',
+      legendDesc: 'Each symbol is a recorded mine or mineral occurrence. Tap one for its name, mineral and mining method.',
+      z: 400, opacity: 1, on: true },
+    { id: 'min', layer: 'open-data-platform:min', style: '',
+      name: 'Mining licences (current)', desc: 'Areas under a current mining licence or lease.',
+      legendDesc: 'Current mining licences. Someone else holds rights here — check before entering or fossicking.',
+      z: 320, opacity: 0.6, on: false },
+    { id: 'el', layer: 'open-data-platform:el', style: '',
+      name: 'Exploration licences (current)', desc: 'Areas under a current exploration licence.',
+      legendDesc: 'Current exploration licences. Fossicking may still be allowed but rules apply — check first.',
+      z: 310, opacity: 0.5, on: false },
+    { id: 'fossils', layer: 'open-data-platform:fossils', style: '',
+      name: 'Fossil sites', desc: 'Recorded fossil collection sites (~7,900).',
+      legendDesc: 'Places where fossils have been collected and identified. Many are on private land.',
+      z: 410, opacity: 1, on: false }
+  ];
+
+  // ---------- Saved settings (per phone, optional) ----------
+  function load() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; } }
+  function save(patch) {
+    try { var s = load(); for (var k in patch) s[k] = patch[k]; localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  var saved = load();
+
+  // ---------- Map ----------
+  var map = L.map('map', {
+    center: saved.center || [-37.1, 145.3],
+    zoom: saved.zoom || 7,
+    zoomControl: true,
+    tap: true
+  });
+  L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+  map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
+
+  var bases = {
+    topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      maxZoom: 17, subdomains: 'abc',
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | style © <a href="https://opentopomap.org">OpenTopoMap</a> (CC BY-SA)'
+    }),
+    street: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    })
+  };
+  var currentBase = saved.base === 'street' ? 'street' : 'topo';
+  bases[currentBase].addTo(map);
+  map.setMaxZoom(currentBase === 'topo' ? 17 : 19);
+
+  function setBase(key) {
+    if (key === currentBase) return;
+    map.removeLayer(bases[currentBase]);
+    currentBase = key;
+    bases[key].addTo(map);
+    bases[key].bringToBack();
+    map.setMaxZoom(key === 'topo' ? 17 : 19);
+    save({ base: key });
+  }
+
+  // ---------- Overlays ----------
+  var savedOn = saved.layers;           // array of ids, or undefined on first run
+  var geoOpacity = typeof saved.geoOpacity === 'number' ? saved.geoOpacity : 0.6;
+
+  OVERLAYS.forEach(function (o) {
+    o.problem = false;
+    o.leaflet = L.tileLayer.wms(GEOSERVER, {
+      layers: o.layer, styles: o.style, format: 'image/png', transparent: true,
+      version: '1.1.1', zIndex: o.z, opacity: o.geology ? geoOpacity : o.opacity,
+      attribution: VIC_ATTR, maxZoom: 19
+    });
+    o.leaflet.on('tileerror', function () { if (!o.problem) { o.problem = true; renderBadges(); } });
+    o.leaflet.on('tileload', function () { if (o.problem) { o.problem = false; renderBadges(); } });
+    o.on = savedOn ? savedOn.indexOf(o.id) !== -1 : o.on;
+    if (o.on) o.leaflet.addTo(map);
+  });
+
+  function activeOverlays() { return OVERLAYS.filter(function (o) { return o.on; }); }
+  function saveOverlays() { save({ layers: activeOverlays().map(function (o) { return o.id; }) }); }
+
+  // Build the layer list
+  var list = document.getElementById('overlayList');
+  OVERLAYS.forEach(function (o) {
+    var row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<input type="checkbox" id="ov-' + o.id + '"' + (o.on ? ' checked' : '') + '>' +
+      '<label for="ov-' + o.id + '">' + o.name + '<small>' + o.desc + '</small></label>' +
+      '<span class="badge" id="badge-' + o.id + '" hidden></span>';
+    list.appendChild(row);
+    row.querySelector('input').addEventListener('change', function (e) {
+      o.on = e.target.checked;
+      if (o.on) o.leaflet.addTo(map); else { map.removeLayer(o.leaflet); o.problem = false; }
+      saveOverlays(); renderBadges(); renderLegend();
+    });
+    if (o.id === 'geol250') {
+      var op = document.createElement('div');
+      op.className = 'opacity';
+      op.innerHTML = '<span>Geology see-through</span><input type="range" min="0.2" max="1" step="0.1" value="' + geoOpacity + '" aria-label="Geology opacity">';
+      list.appendChild(op);
+      op.querySelector('input').addEventListener('input', function (e) {
+        geoOpacity = parseFloat(e.target.value);
+        OVERLAYS.forEach(function (g) { if (g.geology) g.leaflet.setOpacity(geoOpacity); });
+        save({ geoOpacity: geoOpacity });
+      });
+    }
+  });
+
+  function renderBadges() {
+    var z = map.getZoom();
+    OVERLAYS.forEach(function (o) {
+      var b = document.getElementById('badge-' + o.id);
+      if (!b) return;
+      if (o.on && o.problem) { b.className = 'badge warn'; b.textContent = '⚠ not loading'; b.hidden = false; }
+      else if (o.on && o.minZoom && z < o.minZoom) { b.className = 'badge hint'; b.textContent = 'zoom in'; b.hidden = false; }
+      else { b.hidden = true; }
+    });
+  }
+
+  document.querySelectorAll('input[name=base]').forEach(function (r) {
+    r.checked = r.value === currentBase;
+    r.addEventListener('change', function () { if (r.checked) setBase(r.value); });
+  });
+
+  map.on('moveend', function () {
+    var c = map.getCenter();
+    save({ center: [+c.lat.toFixed(5), +c.lng.toFixed(5)], zoom: map.getZoom() });
+    renderBadges();
+  });
+
+  // ---------- Legend ----------
+  function legendUrl(o) {
+    return GEOSERVER + '?service=WMS&version=1.1.1&request=GetLegendGraphic&format=image/png&width=20&height=20' +
+      '&layer=' + encodeURIComponent(o.layer) + (o.style ? '&style=' + encodeURIComponent(o.style) : '') +
+      '&legend_options=' + encodeURIComponent('fontAntiAliasing:true;fontSize:12;forceLabels:on;dx:6');
+  }
+  function renderLegend() {
+    var body = document.getElementById('legendBody');
+    var on = activeOverlays();
+    if (!on.length) { body.innerHTML = '<p class="empty">No data layers are turned on. Use the layers button to add some.</p>'; return; }
+    body.innerHTML = '';
+    on.forEach(function (o) {
+      var d = document.createElement('div');
+      d.className = 'leg-item';
+      d.innerHTML = '<h3>' + o.name + '</h3><p>' + o.legendDesc + '</p><div class="legwrap"><img alt="Legend for ' + o.name + '" loading="lazy"></div>';
+      var img = d.querySelector('img');
+      img.onerror = function () { d.querySelector('.legwrap').innerHTML = '<span class="err">Legend couldn\'t load (no signal, or the server is down).</span>'; };
+      img.src = legendUrl(o);
+      body.appendChild(d);
+    });
+  }
+
+  // ---------- Panels ----------
+  var sheets = {
+    layers: document.getElementById('sheetLayers'),
+    legend: document.getElementById('sheetLegend'),
+    info: document.getElementById('sheetInfo'),
+    about: document.getElementById('sheetAbout')
+  };
+  function openSheet(name) {
+    for (var k in sheets) sheets[k].classList.toggle('open', k === name);
+  }
+  function closeSheets() { for (var k in sheets) sheets[k].classList.remove('open'); }
+  document.querySelectorAll('[data-close]').forEach(function (b) { b.addEventListener('click', closeSheets); });
+  document.getElementById('btnLayers').addEventListener('click', function () {
+    sheets.layers.classList.contains('open') ? closeSheets() : (renderBadges(), openSheet('layers'));
+  });
+  document.getElementById('btnLegend').addEventListener('click', function () {
+    sheets.legend.classList.contains('open') ? closeSheets() : (renderLegend(), openSheet('legend'));
+  });
+  document.getElementById('btnInfo').addEventListener('click', function () {
+    sheets.about.classList.contains('open') ? closeSheets() : openSheet('about');
+  });
+
+  // Guide-only note (shows until dismissed)
+  var note = document.getElementById('note');
+  if (!saved.noteDismissed) { note.hidden = false; document.body.classList.add('note-open'); }
+  document.getElementById('noteClose').addEventListener('click', function () {
+    note.hidden = true; document.body.classList.remove('note-open'); save({ noteDismissed: true });
+  });
+
+  var toastEl = document.getElementById('toast'), toastTimer;
+  function toast(msg, ms) {
+    toastEl.textContent = msg; toastEl.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, ms || 2500);
+  }
+
+  // ---------- My location (GPS) ----------
+  var btnLocate = document.getElementById('btnLocate');
+  var locating = false, firstFix = false, meDot = null, meCircle = null;
+  btnLocate.addEventListener('click', function () {
+    if (locating) {
+      map.stopLocate(); locating = false;
+      btnLocate.classList.remove('on', 'busy');
+      if (meDot) { map.removeLayer(meDot); map.removeLayer(meCircle); meDot = meCircle = null; }
+      return;
+    }
+    if (!navigator.geolocation) { toast('This browser can\'t get your location.'); return; }
+    locating = true; firstFix = true;
+    btnLocate.classList.add('on', 'busy');
+    map.locate({ watch: true, enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+  });
+  map.on('locationfound', function (e) {
+    btnLocate.classList.remove('busy');
+    if (!meDot) {
+      meCircle = L.circle(e.latlng, { radius: e.accuracy, color: '#1a73e8', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(map);
+      meDot = L.circleMarker(e.latlng, { radius: 8, color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1, interactive: false }).addTo(map);
+    } else { meDot.setLatLng(e.latlng); meCircle.setLatLng(e.latlng).setRadius(e.accuracy); }
+    if (firstFix) { map.setView(e.latlng, Math.max(map.getZoom(), 14)); firstFix = false; }
+  });
+  map.on('locationerror', function (e) {
+    btnLocate.classList.remove('busy');
+    if (!meDot) { locating = false; btnLocate.classList.remove('on'); }
+    var msg = e.code === 1 ? 'Location blocked. Allow location for this site in your phone settings.' :
+              e.code === 3 ? 'Still looking for GPS… try again in the open.' : 'Couldn\'t get your location.';
+    toast(msg, 4000);
+  });
+
+  // ---------- Tap to see what's here ----------
+  var tapMarker = null, reqId = 0;
+  var infoBody = document.getElementById('infoBody');
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+  function clean(v) {
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'number') return (v <= -1) ? '' : String(v);
+    var s = String(v).trim().replace(/;\s*$/, '').replace(/;\s*/g, '; ');
+    if (!s || /^unknown/i.test(s)) return '';
+    return s;
+  }
+  function date(v) { if (!v) return ''; var s = String(v).slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.split('-').reverse().join('/') : ''; }
+  function cap(s) { s = clean(s); return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+  function yesList(p, keys, labels) {
+    var out = []; keys.forEach(function (k, i) { if (/^y/i.test(clean(p[k]))) out.push(labels[i]); }); return out.join(', ');
+  }
+
+  // Turn raw data into plain English, per layer
+  function describe(f) {
+    var p = f.properties || {}, id = String(f.id || '');
+    if ('geologicunittype' in p || /geologicunit/i.test(id)) {
+      return { kind: 'Rock type (detailed)', title: cap(String(p.name || '').replace(/:\s*generic$/i, '').replace(/\s*\(\s*/g, ' (')) || 'Geological unit', rows: [
+        ['Description', clean(p.description)], ['Rocks', clean(p.lithology)], ['Age', clean(p.geologichistory)],
+        ['Accuracy', clean(p.positionalaccuracy)]] };
+    }
+    if ('fossil_no' in p || /^fossils\./.test(id)) {
+      var name = [clean(p.genus), clean(p.species)].filter(Boolean).join(' ');
+      var age = clean(p.fosage_fm) === clean(p.fosage_to) ? clean(p.fosage_fm) : [clean(p.fosage_fm), clean(p.fosage_to)].filter(Boolean).join(' to ');
+      return { kind: 'Fossil site', title: cap(p.type) || 'Fossil', rows: [
+        ['Fossil', name], ['Age', age], ['Abundance', clean(p.abundance)], ['Preservation', clean(p.preservatn)],
+        ['Location', clean(p.locdesc)], ['Notes', clean(p.fos_comm) || clean(p.site_comm)], ['Collected', date(p.coll_dt)]] };
+    }
+    if ('mine_name' in p || /^minsite\./.test(id)) {
+      var prod = clean(p.prod) ? clean(p.prod) + ' ' + clean(p.prod_units) : '';
+      var depth = typeof p.depth === 'number' && p.depth > 0 ? p.depth + ' m' : '';
+      var method = clean(p.miningmeth) || yesList(p, ['shaft', 'adit', 'open_cut', 'sluicing', 'dredging'], ['shaft', 'adit', 'open cut', 'sluicing', 'dredging']);
+      return { kind: cap(p.site_type) === 'MINE' ? 'Old mine' : 'Mine / mineral site', title: clean(p.mine_name) || 'Unnamed site', rows: [
+        ['Mineral', clean(p.pri_comm) || clean(p.min_ass)], ['Other minerals', clean(p.sec_comm)], ['Goldfield', clean(p.field_name)],
+        ['Deposit', [clean(p.dep_ty_gen), clean(p.dep_ty_sp)].filter(Boolean).join(' — ')], ['Mining method', method],
+        ['Depth', depth], ['Recorded production', prod + (clean(p.prod_comm) ? ' ' + clean(p.prod_comm).toLowerCase() : '')],
+        ['Host rock', clean(p.host_lith)], ['Size', cap(String(p.size_cat || '').toLowerCase())],
+        ['Position accuracy', typeof p.locn_acc === 'number' && p.locn_acc > 0 ? '± ' + p.locn_acc + ' m' : '']] };
+    }
+    if ('tno' in p) {
+      var isEl = /^el\./.test(id) || /explor/i.test(p.typedesc || '');
+      return { kind: isEl ? 'Exploration licence' : 'Mining licence', title: clean(p.tno) || 'Tenement', rows: [
+        ['Type', clean(p.typedesc)], ['Status', clean(p.statusldsc) || clean(p.statussdsc) || clean(p.status)], ['Holder', clean(p.own_name)],
+        ['Site', clean(p.site_name)], ['Granted', date(p.grant1_dt)], ['Expires', date(p.expl_dt)],
+        ['Area', typeof p.hectares === 'number' ? Math.round(p.hectares).toLocaleString() + ' ha' : '']] };
+    }
+    if ('unitname' in p || 'map_symb' in p) {
+      var a = clean(p.ageold) === clean(p.ageyoung) ? clean(p.ageold) : [clean(p.ageold), clean(p.ageyoung)].filter(Boolean).join(' to ');
+      var ma = (typeof p.ageoldno === 'number' && p.ageoldno > 0) ? ' (' + p.ageyoungno + '–' + p.ageoldno + ' million yrs)' : '';
+      return { kind: 'Rock unit (regional)', title: clean(p.unitname) || clean(p.map_symb) || 'Rock unit', rows: [
+        ['Type', clean(p.envdesc)], ['Age', a + ma], ['Rocks', [clean(p.lithdesc1), clean(p.lithdesc2)].filter(Boolean).join(' ')],
+        ['Map symbol', clean(p.map_symb)]] };
+    }
+    if ('siteid_ms' in p || /^goldfld/.test(id)) {
+      return { kind: 'Goldfield', title: clean(p.comments) || clean(p.type) || 'Goldfield', rows: [
+        ['Type', clean(p.type)], ['Notes', clean(p.comments)], ['Area', typeof p.hectares === 'number' ? Math.round(p.hectares).toLocaleString() + ' ha' : '']] };
+    }
+    // Unknown: show whatever there is
+    var rows = []; for (var k in p) { var v = clean(p[k]); if (v && rows.length < 10) rows.push([k, v]); }
+    return { kind: 'Feature', title: id, rows: rows };
+  }
+
+  function featureInfoUrl(latlng, layers, format) {
+    var size = map.getSize(), b = map.getBounds(), crs = map.options.crs;
+    var sw = crs.project(b.getSouthWest()), ne = crs.project(b.getNorthEast());
+    var pt = map.latLngToContainerPoint(latlng).round();
+    var names = layers.map(function (o) { return o.layer; }).join(',');
+    var styles = layers.map(function (o) { return o.style; }).join(',');
+    return GEOSERVER + '?service=WMS&version=1.1.1&request=GetFeatureInfo' +
+      '&layers=' + encodeURIComponent(names) + '&query_layers=' + encodeURIComponent(names) +
+      '&styles=' + encodeURIComponent(styles) + '&srs=EPSG:3857' +
+      '&bbox=' + [sw.x, sw.y, ne.x, ne.y].join(',') + '&width=' + size.x + '&height=' + size.y +
+      '&x=' + pt.x + '&y=' + pt.y + '&info_format=' + encodeURIComponent(format) + '&feature_count=20&buffer=12';
+  }
+
+  function renderResults(latlng, features, errUrl) {
+    var ll = latlng.lat.toFixed(5) + ', ' + latlng.lng.toFixed(5);
+    var html = '<div class="coords">📍 ' + ll + ' <button id="copyLL">Copy</button></div>';
+    if (errUrl) {
+      html += '<p class="err">Couldn\'t load details — no signal, or the government server didn\'t answer.</p>' +
+              '<p><a href="' + esc(errUrl) + '" target="_blank" rel="noopener">Try opening the raw details</a></p>';
+    } else if (!features.length) {
+      html += '<p class="empty">Nothing recorded right here in the layers that are turned on. Try tapping closer to a symbol, or turn on more layers.</p>';
+    } else {
+      var seen = {};
+      features.forEach(function (f) {
+        var key = f.id || JSON.stringify(f.properties);
+        if (seen[key]) return; seen[key] = true;
+        var d = describe(f);
+        var rows = d.rows.filter(function (r) { return r[1]; })
+          .map(function (r) { return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; }).join('');
+        html += '<div class="feat"><div class="kind">' + esc(d.kind) + '</div><div class="title">' + esc(d.title) + '</div>' +
+                (rows ? '<dl>' + rows + '</dl>' : '') + '</div>';
+      });
+    }
+    infoBody.innerHTML = html;
+    var c = document.getElementById('copyLL');
+    if (c) c.addEventListener('click', function () {
+      try { navigator.clipboard.writeText(ll).then(function () { toast('Copied'); }, function () { toast(ll, 4000); }); }
+      catch (e) { toast(ll, 4000); }
+    });
+  }
+
+  // Order results: points first (mines, fossils), then licences, then geology
+  var ORDER = { 'Old mine': 1, 'Mine / mineral site': 1, 'Fossil site': 2, 'Mining licence': 3, 'Exploration licence': 4, 'Goldfield': 5, 'Rock type (detailed)': 6, 'Rock unit (regional)': 7 };
+
+  map.on('click', function (e) {
+    var z = map.getZoom();
+    var layers = activeOverlays().filter(function (o) { return !(o.minZoom && z < o.minZoom); });
+    if (tapMarker) map.removeLayer(tapMarker);
+    tapMarker = L.circleMarker(e.latlng, { radius: 7, color: '#d33', weight: 3, fill: false, interactive: false }).addTo(map);
+    if (!layers.length) {
+      infoBody.innerHTML = '<p class="empty">Turn on a data layer first (layers button, top right).</p>';
+      openSheet('info'); return;
+    }
+    var my = ++reqId;
+    infoBody.innerHTML = '<p class="empty">Looking up…</p>';
+    openSheet('info');
+    var url = featureInfoUrl(e.latlng, layers, 'application/json');
+    var htmlUrl = featureInfoUrl(e.latlng, layers, 'text/html');
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 20000);
+    fetch(url, ctrl ? { signal: ctrl.signal } : {})
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (json) {
+        clearTimeout(timer);
+        if (my !== reqId) return;
+        var feats = (json && json.features) || [];
+        feats.sort(function (a, b) { return (ORDER[describe(a).kind] || 9) - (ORDER[describe(b).kind] || 9); });
+        renderResults(e.latlng, feats);
+      })
+      .catch(function () {
+        clearTimeout(timer);
+        if (my !== reqId) return;
+        renderResults(e.latlng, [], htmlUrl);
+      });
+  });
+
+  // Close the result panel when the map is dragged
+  map.on('dragstart', function () { if (sheets.info.classList.contains('open')) closeSheets(); });
+
+  renderBadges();
+})();
+</script>
+</body>
+</html>
